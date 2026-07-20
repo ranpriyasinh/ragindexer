@@ -1,0 +1,33 @@
+# Environment variables
+# Ignore all .env files, but allow an example file to be checked in.
+.env
+.env.*
+!.env.example
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Build and distribution
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+
+# IDE and editor configuration
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Test artifacts
+.pytest_cache/
+coverage.xml
+.coverage
