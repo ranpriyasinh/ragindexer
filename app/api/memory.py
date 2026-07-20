@@ -8,11 +8,13 @@ request body is JSON with `type: "memory"`.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
 
 from app.models.request import MemoryIngestRequest
 from app.models.response import IngestSummary
-from app.services.ingestion import IngestionService
+from app.services.memory_ingestion import MemoryIngestionError, MemoryIngestionService
 
 # No routes are registered directly on this router today — it exists to keep
 # memory-branch logic isolated per the fixed directory structure, and is
@@ -20,13 +22,31 @@ from app.services.ingestion import IngestionService
 router = APIRouter(tags=["memory"])
 
 
+def get_memory_ingestion_service() -> MemoryIngestionService:
+    return MemoryIngestionService()
+
+
 def handle_memory_ingest(
-    request: MemoryIngestRequest, ingestion_service: IngestionService
+    request: MemoryIngestRequest,
+    ingestion_service: Any = None,
 ) -> IngestSummary:
-    result = ingestion_service.ingest_memory_turns(request.turns)
+    """
+    Handles JSON Branch B memory turn ingestion.
+    Uses dedicated MemoryIngestionService for PHI validation, vectorization, and dispatch.
+    """
+    if isinstance(ingestion_service, MemoryIngestionService):
+        service = ingestion_service
+    else:
+        service = get_memory_ingestion_service()
+
+    try:
+        result = service.ingest_memory_turns(request.turns)
+    except MemoryIngestionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     return IngestSummary(
         type="memory",
         memories_added=result["memories_added"],
-        mode=ingestion_service._settings.COMORI_API_MODE,
+        mode=result["mode"],
         dispatched=result["dispatched"],
     )
