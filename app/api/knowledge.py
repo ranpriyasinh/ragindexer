@@ -175,26 +175,45 @@ def retrieve_endpoint(
     provider: EmbeddingProvider = Depends(get_embedding_provider),
     nest_client: NestClient = Depends(get_nest_client),
 ) -> RetrieveResponse:
-    if payload.type != IngestType.KNOWLEDGE:
-        raise HTTPException(status_code=501, detail="Only type='knowledge' retrieval is implemented.")
-
     if not payload.query.strip():
         raise HTTPException(status_code=400, detail="query must not be empty.")
 
     vector = embed_query(provider, payload.query)
 
-    try:
-        raw_hits = nest_client.search_knowledge_chunks(vector, payload.k)
-    except NestClientError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if payload.type == IngestType.KNOWLEDGE:
+        try:
+            raw_hits = nest_client.search_knowledge_chunks(vector, payload.k)
+        except NestClientError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    hits = [DecodeHit.model_validate(h) for h in raw_hits]
-    results = decode_hits(hits)
+        hits = [DecodeHit.model_validate(h) for h in raw_hits]
+        results = decode_hits(hits)
 
-    print("\n=== KNOWLEDGE RETRIEVAL HITS ===")
-    for r in results:
-        print(f"Source: {r.source} | Score: {r.score:.4f}")
-        print(f"Content: {r.text}\n")
-    print("================================\n")
+        print("\n=== KNOWLEDGE RETRIEVAL HITS ===")
+        for r in results:
+            print(f"Source: {r.source} | Score: {r.score:.4f}")
+            print(f"Content: {r.text}\n")
+        print("================================\n")
+
+    elif payload.type == IngestType.MEMORY:
+        if not payload.user_id:
+            raise HTTPException(status_code=400, detail="user_id is required for memory retrieval.")
+
+        try:
+            raw_hits = nest_client.search_memory_vectors(payload.user_id, vector, payload.k)
+        except NestClientError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        hits = [DecodeHit.model_validate(h) for h in raw_hits]
+        results = decode_hits(hits)
+
+        print(f"\n=== USER MEMORY RETRIEVAL HITS (User: {payload.user_id}) ===")
+        for r in results:
+            print(f"Kind/Ref: {r.source} | Score: {r.score:.4f}")
+            print(f"Content: {r.text}\n")
+        print("==================================================\n")
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported retrieval type: {payload.type}")
 
     return RetrieveResponse(type=payload.type.value, query=payload.query, k=payload.k, results=results)
