@@ -44,10 +44,122 @@ class NestClient:
     def _dispatch(self, endpoint: str, payload: Dict[str, Any]) -> bool:
         if self._settings.COMORI_API_MODE == "print":
             self._print_payload(endpoint, payload)
+            if endpoint == "/v1/memory/vectors":
+                self._save_memories_to_db(payload.get("memories", []))
+            elif endpoint == "/v1/knowledge/chunks":
+                self._save_knowledge_chunks_to_db(payload.get("chunks", []))
             return True
         if self._settings.COMORI_API_MODE == "http":
             return self._send_http(endpoint, payload)
         raise NestClientError(f"Unknown COMORI_API_MODE: {self._settings.COMORI_API_MODE}")
+
+    def _save_knowledge_chunks_to_db(self, chunks: List[Dict[str, Any]]) -> None:
+        if not chunks:
+            return
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                host=self._settings.DB_HOST,
+                port=self._settings.DB_PORT,
+                database=self._settings.DB_NAME,
+                user=self._settings.DB_USER,
+                password=self._settings.DB_PASSWORD,
+            )
+            try:
+                with conn.cursor() as cursor:
+                    for c in chunks:
+                        emb = c.get("embedding")
+                        emb_str = f"[{','.join(map(str, emb))}]" if emb else None
+                        cursor.execute(
+                            """
+                            INSERT INTO knowledge_chunks (chunk_id, source, domain, evidence_tier, topic_tags, content, embedding, corpus_version)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (chunk_id) DO UPDATE SET
+                                source = EXCLUDED.source,
+                                domain = EXCLUDED.domain,
+                                evidence_tier = EXCLUDED.evidence_tier,
+                                topic_tags = EXCLUDED.topic_tags,
+                                content = EXCLUDED.content,
+                                embedding = EXCLUDED.embedding,
+                                corpus_version = EXCLUDED.corpus_version
+                            """,
+                            (
+                                c.get("chunk_id"),
+                                c.get("source"),
+                                c.get("domain"),
+                                c.get("evidence_tier"),
+                                c.get("topic_tags"),
+                                c.get("content"),
+                                emb_str,
+                                c.get("corpus_version"),
+                            ),
+                        )
+                conn.commit()
+                logger.info("Successfully stored %d knowledge chunks in pgvector database.", len(chunks))
+            except Exception as e:
+                conn.rollback()
+                logger.error("Failed to write knowledge chunks to DB: %s", e)
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error("Failed to connect to local PG database for knowledge chunks: %s", e)
+
+    def _save_memories_to_db(self, memories: List[Dict[str, Any]]) -> None:
+        if not memories:
+            return
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                host=self._settings.DB_HOST,
+                port=self._settings.DB_PORT,
+                database=self._settings.DB_NAME,
+                user=self._settings.DB_USER,
+                password=self._settings.DB_PASSWORD,
+            )
+            try:
+                with conn.cursor() as cursor:
+                    # Automatically ensure users exist in the local users table to prevent FK failure
+                    user_ids = list({m["user_id"] for m in memories if m.get("user_id")})
+                    for uid in user_ids:
+                        cursor.execute(
+                            "INSERT INTO users (id) VALUES (%s) ON CONFLICT (id) DO NOTHING",
+                            (uid,),
+                        )
+
+                    for m in memories:
+                        emb = m.get("embedding")
+                        emb_str = f"[{','.join(map(str, emb))}]" if emb else None
+                        cursor.execute(
+                            """
+                            INSERT INTO memory_vectors (memory_id, user_id, kind, snippet, ref, embedding, occurred_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (memory_id) DO UPDATE SET
+                                user_id = EXCLUDED.user_id,
+                                kind = EXCLUDED.kind,
+                                snippet = EXCLUDED.snippet,
+                                ref = EXCLUDED.ref,
+                                embedding = EXCLUDED.embedding,
+                                occurred_at = EXCLUDED.occurred_at
+                            """,
+                            (
+                                m.get("memory_id"),
+                                m.get("user_id"),
+                                m.get("kind"),
+                                m.get("snippet"),
+                                m.get("ref"),
+                                emb_str,
+                                m.get("occurred_at"),
+                            ),
+                        )
+                conn.commit()
+                logger.info("Successfully stored %d memories in pgvector database.", len(memories))
+            except Exception as e:
+                conn.rollback()
+                logger.error("Failed to write memory vectors to DB: %s", e)
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error("Failed to connect to local PG database: %s", e)
 
     def _print_payload(self, endpoint: str, payload: Dict[str, Any]) -> None:
         logger.info(

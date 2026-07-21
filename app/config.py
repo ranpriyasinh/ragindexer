@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     APP_NAME: str = "comori-rag-indexer"
     HTTP_TIMEOUT_SECONDS: float = 15.0
 
+    # --- PostgreSQL Connection -----------------------------------------------
+    DB_HOST: str = "localhost"
+    DB_PORT: int = 5432
+    DB_NAME: str = "comori_db"
+    DB_USER: str = "postgres"
+    DB_PASSWORD: Optional[str] = None
+
 
 @lru_cache
 def get_settings() -> Settings:
