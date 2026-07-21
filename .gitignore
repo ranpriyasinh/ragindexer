@@ -19,10 +19,13 @@ dist/
 # Virtual environments
 venv/
 .venv/
+venv312/
 
 # IDE and editor configuration
 .idea/
 .vscode/
+.postman/
+postman/
 
 # macOS
 .DS_Store

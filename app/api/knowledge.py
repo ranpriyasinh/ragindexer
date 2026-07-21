@@ -10,6 +10,7 @@ endpoints that comori-va calls directly:
 from __future__ import annotations
 
 import json
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.requests import Request
@@ -17,12 +18,15 @@ from fastapi.requests import Request
 from app.api.memory import handle_memory_ingest
 from app.config import Settings, get_settings
 from app.models.request import (
+    DecodeHit,
     DecodeRequest,
     EmbedQueryRequest,
     IngestType,
     KnowledgeIngestMetadata,
     MemoryIngestRequest,
+    RetrieveRequest,
 )
+
 from app.models.response import DecodeResponse, EmbedQueryResponse, IngestSummary
 from app.services.embeddings import EmbeddingProvider, get_embedding_provider
 from app.services.ingestion import IngestionService
@@ -31,29 +35,51 @@ from app.services.search import decode_hits, embed_query
 
 router = APIRouter(prefix="/api/v1", tags=["knowledge"])
 
+DEFAULT_METADATA_EXAMPLE = json.dumps(
+    {
+        "source": "Nish CV 2026",
+        "domain": "general",
+        "evidence_tier": "tier3",
+        "topic_tags": ["resume", "cv"],
+    }
+)
+
 
 def get_ingestion_service(settings: Settings = Depends(get_settings)) -> IngestionService:
     return IngestionService(settings=settings)
 
 
-@router.post("/ingest", response_model=IngestSummary)
+@router.post(
+    "/ingest",
+    response_model=IngestSummary,
+    summary="Unified Ingestion Endpoint",
+    description=(
+        "Unified ingestion endpoint supporting two modes:\n"
+        "1. **Branch A (Knowledge Documents)**: Send `multipart/form-data` with `type='knowledge'`, "
+        "a `file` (.pdf or .md), and a JSON string in `metadata`.\n"
+        "2. **Branch B (Memory Turns)**: Send `application/json` with `type='memory'` and `turns=[...]`."
+    ),
+)
 async def ingest(
     request: Request,
+    type: Optional[str] = Form(
+        "knowledge",
+        description="Must be exactly 'knowledge' for file uploads.",
+    ),
+    file: Optional[UploadFile] = File(
+        None, description="PDF or Markdown document file to upload (Branch A)"
+    ),
+    metadata: Optional[str] = Form(
+        DEFAULT_METADATA_EXAMPLE,
+        description="JSON metadata string for Branch A document metadata.",
+    ),
     settings: Settings = Depends(get_settings),
     ingestion_service: IngestionService = Depends(get_ingestion_service),
 ) -> IngestSummary:
-    """
-    Unified ingestion endpoint.
-
-    - multipart/form-data with `type=knowledge`, a `file`, and a JSON
-      `metadata` field  -> Branch A (document ingestion)
-    - application/json body with `type: "memory"` and `turns: [...]`
-      -> Branch B (conversation memory ingestion)
-    """
     content_type = request.headers.get("content-type", "")
 
     if "multipart/form-data" in content_type:
-        return await _ingest_knowledge_branch(request, ingestion_service, settings)
+        return await _ingest_knowledge_branch(type, file, metadata, ingestion_service, settings)
 
     if "application/json" in content_type:
         body = await request.json()
@@ -74,26 +100,25 @@ async def ingest(
 
 
 async def _ingest_knowledge_branch(
-    request: Request, ingestion_service: IngestionService, settings: Settings
+    ingest_type: Optional[str],
+    upload: Optional[UploadFile],
+    metadata_raw: Optional[str],
+    ingestion_service: IngestionService,
+    settings: Settings,
 ) -> IngestSummary:
-    form = await request.form()
-
-    ingest_type = form.get("type")
     if ingest_type != IngestType.KNOWLEDGE.value:
         raise HTTPException(
             status_code=400, detail="multipart ingest requires type='knowledge'."
         )
 
-    upload: UploadFile | None = form.get("file")  # type: ignore[assignment]
     if upload is None:
         raise HTTPException(status_code=400, detail="Missing required 'file' form field.")
 
-    metadata_raw = form.get("metadata")
     if not metadata_raw:
         raise HTTPException(status_code=400, detail="Missing required 'metadata' form field.")
 
     try:
-        metadata_dict = json.loads(metadata_raw)  # type: ignore[arg-type]
+        metadata_dict = json.loads(metadata_raw)
         metadata = KnowledgeIngestMetadata.model_validate(metadata_dict)
     except (json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=f"Invalid metadata JSON: {exc}") from exc
@@ -133,3 +158,43 @@ def embed_query_endpoint(
 @router.post("/decode", response_model=DecodeResponse)
 def decode_endpoint(payload: DecodeRequest) -> DecodeResponse:
     return DecodeResponse(results=decode_hits(payload.hits))
+
+
+from app.models.request import RetrieveRequest
+from app.models.response import RetrieveResponse
+from app.clients.nest_client import NestClient, NestClientError
+
+
+def get_nest_client(settings: Settings = Depends(get_settings)) -> NestClient:
+    return NestClient(settings=settings)
+
+
+@router.post("/retrieve", response_model=RetrieveResponse)
+def retrieve_endpoint(
+    payload: RetrieveRequest,
+    provider: EmbeddingProvider = Depends(get_embedding_provider),
+    nest_client: NestClient = Depends(get_nest_client),
+) -> RetrieveResponse:
+    if payload.type != IngestType.KNOWLEDGE:
+        raise HTTPException(status_code=501, detail="Only type='knowledge' retrieval is implemented.")
+
+    if not payload.query.strip():
+        raise HTTPException(status_code=400, detail="query must not be empty.")
+
+    vector = embed_query(provider, payload.query)
+
+    try:
+        raw_hits = nest_client.search_knowledge_chunks(vector, payload.k)
+    except NestClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    hits = [DecodeHit.model_validate(h) for h in raw_hits]
+    results = decode_hits(hits)
+
+    print("\n=== KNOWLEDGE RETRIEVAL HITS ===")
+    for r in results:
+        print(f"Source: {r.source} | Score: {r.score:.4f}")
+        print(f"Content: {r.text}\n")
+    print("================================\n")
+
+    return RetrieveResponse(type=payload.type.value, query=payload.query, k=payload.k, results=results)
