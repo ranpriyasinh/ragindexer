@@ -37,16 +37,25 @@ class MemoryKind(str, Enum):
 
 
 class KnowledgeIngestMetadata(BaseModel):
-    """Metadata accompanying a knowledge (Branch A) file upload.
-
-    Sent alongside the multipart file as a JSON-encoded form field named `metadata`.
-    """
+    """Metadata accompanying a knowledge (Branch A) ingest request."""
 
     source: str = Field(..., description='e.g. "Ben-Yacov 2021 · Diabetes Care"')
     domain: Domain
     evidence_tier: EvidenceTier
     topic_tags: List[str] = Field(default_factory=list)
     corpus_version: Optional[str] = None
+
+
+class KnowledgeIngestRequest(BaseModel):
+    """JSON body for Branch A ingestion (Type = knowledge).
+
+    Text is expected to already be extracted (e.g. from a PDF/MD) upstream —
+    this service no longer parses files, only chunks + embeds + pushes.
+    """
+
+    type: IngestType = IngestType.KNOWLEDGE
+    text: str = Field(..., min_length=1, description="Already-extracted document text.")
+    metadata: KnowledgeIngestMetadata
 
 
 class MemoryTurn(BaseModel):
@@ -84,6 +93,7 @@ class DecodeHit(BaseModel):
 
 class DecodeRequest(BaseModel):
     hits: List[DecodeHit]
+
 
 class RetrieveRequest(BaseModel):
     """Unified query-flow request: embed + search + decode in one call."""
