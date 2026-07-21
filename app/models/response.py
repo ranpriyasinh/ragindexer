@@ -69,3 +69,9 @@ class DecodedResult(BaseModel):
 
 class DecodeResponse(BaseModel):
     results: List[DecodedResult]
+
+class RetrieveResponse(BaseModel):
+    type: str
+    query: str
+    k: int
+    results: List[DecodedResult]

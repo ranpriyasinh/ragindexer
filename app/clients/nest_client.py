@@ -76,3 +76,40 @@ class NestClient:
         except httpx.HTTPError as exc:
             logger.error("comori-api dispatch failed: %s", exc)
             raise NestClientError(f"Failed to reach comori-api at {url}: {exc}") from exc
+
+    def search_knowledge_chunks(self, embedding: List[float], k: int) -> List[Dict[str, Any]]:
+        """Ask comori-api to run a pgvector similarity search against knowledge_chunks."""
+        return self._fetch(
+            endpoint="/v1/knowledge/search",
+            payload={"embedding": embedding, "k": k},
+        )
+
+    # -- internal --------------------------------------------------------
+
+    def _fetch(self, endpoint: str, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Like _dispatch, but for calls that return data instead of a bool."""
+        if self._settings.COMORI_API_MODE == "print":
+            self._print_payload(endpoint, payload)
+            logger.info("[PRINT MODE] No comori-api to query — returning empty hit list.")
+            return []
+        if self._settings.COMORI_API_MODE == "http":
+            return self._send_http_fetch(endpoint, payload)
+        raise NestClientError(f"Unknown COMORI_API_MODE: {self._settings.COMORI_API_MODE}")
+
+    def _send_http_fetch(self, endpoint: str, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not self._settings.COMORI_API_URL:
+            raise NestClientError("COMORI_API_MODE=http requires COMORI_API_URL to be set.")
+
+        url = self._settings.COMORI_API_URL.rstrip("/") + endpoint
+        headers = {"Content-Type": "application/json"}
+        if self._settings.COMORI_API_KEY:
+            headers["Authorization"] = f"Bearer {self._settings.COMORI_API_KEY}"
+
+        try:
+            with httpx.Client(timeout=self._settings.HTTP_TIMEOUT_SECONDS) as client:
+                response = client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                return response.json().get("hits", [])
+        except httpx.HTTPError as exc:
+            logger.error("comori-api search failed: %s", exc)
+            raise NestClientError(f"Failed to reach comori-api at {url}: {exc}") from exc

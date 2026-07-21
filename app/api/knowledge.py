@@ -18,12 +18,15 @@ from fastapi.requests import Request
 from app.api.memory import handle_memory_ingest
 from app.config import Settings, get_settings
 from app.models.request import (
+    DecodeHit,
     DecodeRequest,
     EmbedQueryRequest,
     IngestType,
     KnowledgeIngestMetadata,
     MemoryIngestRequest,
+    RetrieveRequest,
 )
+
 from app.models.response import DecodeResponse, EmbedQueryResponse, IngestSummary
 from app.services.embeddings import EmbeddingProvider, get_embedding_provider
 from app.services.ingestion import IngestionService
@@ -155,3 +158,43 @@ def embed_query_endpoint(
 @router.post("/decode", response_model=DecodeResponse)
 def decode_endpoint(payload: DecodeRequest) -> DecodeResponse:
     return DecodeResponse(results=decode_hits(payload.hits))
+
+
+from app.models.request import RetrieveRequest
+from app.models.response import RetrieveResponse
+from app.clients.nest_client import NestClient, NestClientError
+
+
+def get_nest_client(settings: Settings = Depends(get_settings)) -> NestClient:
+    return NestClient(settings=settings)
+
+
+@router.post("/retrieve", response_model=RetrieveResponse)
+def retrieve_endpoint(
+    payload: RetrieveRequest,
+    provider: EmbeddingProvider = Depends(get_embedding_provider),
+    nest_client: NestClient = Depends(get_nest_client),
+) -> RetrieveResponse:
+    if payload.type != IngestType.KNOWLEDGE:
+        raise HTTPException(status_code=501, detail="Only type='knowledge' retrieval is implemented.")
+
+    if not payload.query.strip():
+        raise HTTPException(status_code=400, detail="query must not be empty.")
+
+    vector = embed_query(provider, payload.query)
+
+    try:
+        raw_hits = nest_client.search_knowledge_chunks(vector, payload.k)
+    except NestClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    hits = [DecodeHit.model_validate(h) for h in raw_hits]
+    results = decode_hits(hits)
+
+    print("\n=== KNOWLEDGE RETRIEVAL HITS ===")
+    for r in results:
+        print(f"Source: {r.source} | Score: {r.score:.4f}")
+        print(f"Content: {r.text}\n")
+    print("================================\n")
+
+    return RetrieveResponse(type=payload.type.value, query=payload.query, k=payload.k, results=results)
