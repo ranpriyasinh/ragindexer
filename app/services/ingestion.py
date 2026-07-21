@@ -89,6 +89,61 @@ class IngestionService:
             "dispatched": dispatched,
         }
 
+    def ingest_knowledge_text(
+        self, text: str, metadata: KnowledgeIngestMetadata
+    ) -> Dict[str, Any]:
+        cleaned = parser.clean_text(text)
+
+        chunks = chunk_text(
+            cleaned,
+            chunk_size=self._settings.CHUNK_TOKEN_SIZE,
+            overlap=self._settings.CHUNK_TOKEN_OVERLAP,
+        )
+        if not chunks:
+            return {
+                "docs_processed": 1,
+                "chunks_added": 0,
+                "chunks_updated": 0,
+                "chunks_skipped": 0,
+                "dispatched": False,
+            }
+
+        corpus_version = metadata.corpus_version or self._settings.CORPUS_VERSION
+        contents = [c.content for c in chunks]
+        vectors = self._embeddings.embed(contents)
+
+        rows: List[Dict[str, Any]] = []
+        seen_ids = set()
+        chunks_skipped = 0
+        for chunk, vector in zip(chunks, vectors):
+            chunk_id = content_hash_chunk_id(chunk.content)
+            if chunk_id in seen_ids:
+                chunks_skipped += 1
+                continue
+            seen_ids.add(chunk_id)
+            rows.append(
+                {
+                    "chunk_id": chunk_id,
+                    "source": metadata.source,
+                    "domain": metadata.domain.value,
+                    "evidence_tier": metadata.evidence_tier.value,
+                    "topic_tags": metadata.topic_tags,
+                    "content": chunk.content,
+                    "embedding": vector,
+                    "corpus_version": corpus_version,
+                }
+            )
+
+        dispatched = self._nest_client.push_knowledge_chunks(rows)
+
+        return {
+            "docs_processed": 1,
+            "chunks_added": len(rows),
+            "chunks_updated": 0,
+            "chunks_skipped": chunks_skipped,
+            "dispatched": dispatched,
+        }
+
     # ------------------------------------------------------------------
     # Branch B — memory / conversation turns
     # ------------------------------------------------------------------

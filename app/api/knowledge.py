@@ -23,6 +23,7 @@ from app.models.request import (
     EmbedQueryRequest,
     IngestType,
     KnowledgeIngestMetadata,
+    KnowledgeIngestRequest,
     MemoryIngestRequest,
     RetrieveRequest,
 )
@@ -55,47 +56,46 @@ def get_ingestion_service(settings: Settings = Depends(get_settings)) -> Ingesti
     summary="Unified Ingestion Endpoint",
     description=(
         "Unified ingestion endpoint supporting two modes:\n"
-        "1. **Branch A (Knowledge Documents)**: Send `multipart/form-data` with `type='knowledge'`, "
-        "a `file` (.pdf or .md), and a JSON string in `metadata`.\n"
+        "1. **Branch A (Knowledge Text)**: Send `application/json` with `type='knowledge'`, `text='...'`, and `metadata={...}`.\n"
         "2. **Branch B (Memory Turns)**: Send `application/json` with `type='memory'` and `turns=[...]`."
     ),
 )
 async def ingest(
     request: Request,
-    type: Optional[str] = Form(
-        "knowledge",
-        description="Must be exactly 'knowledge' for file uploads.",
-    ),
-    file: Optional[UploadFile] = File(
-        None, description="PDF or Markdown document file to upload (Branch A)"
-    ),
-    metadata: Optional[str] = Form(
-        DEFAULT_METADATA_EXAMPLE,
-        description="JSON metadata string for Branch A document metadata.",
-    ),
     settings: Settings = Depends(get_settings),
     ingestion_service: IngestionService = Depends(get_ingestion_service),
 ) -> IngestSummary:
     content_type = request.headers.get("content-type", "")
 
-    if "multipart/form-data" in content_type:
-        return await _ingest_knowledge_branch(type, file, metadata, ingestion_service, settings)
-
     if "application/json" in content_type:
         body = await request.json()
-        if body.get("type") != IngestType.MEMORY.value:
-            raise HTTPException(
-                status_code=400,
-                detail="JSON ingest body must have type='memory'. "
-                "Use multipart/form-data with type='knowledge' for document ingestion.",
+        req_type = body.get("type", "knowledge")
+
+        if req_type == IngestType.KNOWLEDGE.value or "text" in body:
+            know_request = KnowledgeIngestRequest.model_validate(body)
+            res = ingestion_service.ingest_knowledge_text(know_request.text, know_request.metadata)
+            return IngestSummary(
+                type="knowledge",
+                docs_processed=res["docs_processed"],
+                chunks_added=res["chunks_added"],
+                chunks_updated=res["chunks_updated"],
+                chunks_skipped=res["chunks_skipped"],
+                mode=settings.COMORI_API_MODE,
+                dispatched=res["dispatched"],
             )
-        memory_request = MemoryIngestRequest.model_validate(body)
-        return handle_memory_ingest(memory_request, ingestion_service)
+
+        if req_type == IngestType.MEMORY.value:
+            memory_request = MemoryIngestRequest.model_validate(body)
+            return handle_memory_ingest(memory_request, ingestion_service)
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid type '{req_type}'. Must be 'knowledge' or 'memory'.",
+        )
 
     raise HTTPException(
         status_code=415,
-        detail="Unsupported content type. Use multipart/form-data (knowledge) "
-        "or application/json (memory).",
+        detail="Unsupported content type. Send application/json.",
     )
 
 
