@@ -99,5 +99,6 @@ class RetrieveRequest(BaseModel):
     """Unified query-flow request: embed + search + decode in one call."""
 
     query: str = Field(..., min_length=1)
-    type: IngestType = IngestType.KNOWLEDGE  # only KNOWLEDGE is implemented for now
+    type: IngestType = IngestType.KNOWLEDGE
     k: int = Field(default=5, ge=1, le=50)
+    user_id: Optional[str] = None
