@@ -16,8 +16,12 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.requests import Request
 
 from app.api.memory import handle_memory_ingest
-from app.config import Settings, get_settings
-from app.models.request import (
+from app.clients.nest_client import NestClient, NestClientError
+from app.services.embeddings import EmbeddingProvider, get_embedding_provider
+from app.services.ingestion import IngestionService
+from app.services.parser import UnsupportedFileTypeError
+from app.services.search import decode_hits, embed_query
+from schema.request import (
     DecodeHit,
     DecodeRequest,
     EmbedQueryRequest,
@@ -27,12 +31,7 @@ from app.models.request import (
     MemoryIngestRequest,
     RetrieveRequest,
 )
-
-from app.models.response import DecodeResponse, EmbedQueryResponse, IngestSummary
-from app.services.embeddings import EmbeddingProvider, get_embedding_provider
-from app.services.ingestion import IngestionService
-from app.services.parser import UnsupportedFileTypeError
-from app.services.search import decode_hits, embed_query
+from schema.response import DecodeResponse, EmbedQueryResponse, IngestSummary, RetrieveResponse
 
 router = APIRouter(prefix="/api/v1", tags=["knowledge"])
 
@@ -46,8 +45,8 @@ DEFAULT_METADATA_EXAMPLE = json.dumps(
 )
 
 
-def get_ingestion_service(settings: Settings = Depends(get_settings)) -> IngestionService:
-    return IngestionService(settings=settings)
+def get_ingestion_service() -> IngestionService:
+    return IngestionService()
 
 
 @router.post(
@@ -62,7 +61,6 @@ def get_ingestion_service(settings: Settings = Depends(get_settings)) -> Ingesti
 )
 async def ingest(
     request: Request,
-    settings: Settings = Depends(get_settings),
     ingestion_service: IngestionService = Depends(get_ingestion_service),
 ) -> IngestSummary:
     content_type = request.headers.get("content-type", "")
@@ -80,7 +78,6 @@ async def ingest(
                 chunks_added=res["chunks_added"],
                 chunks_updated=res["chunks_updated"],
                 chunks_skipped=res["chunks_skipped"],
-                mode=settings.COMORI_API_MODE,
                 dispatched=res["dispatched"],
             )
 
@@ -104,7 +101,6 @@ async def _ingest_knowledge_branch(
     upload: Optional[UploadFile],
     metadata_raw: Optional[str],
     ingestion_service: IngestionService,
-    settings: Settings,
 ) -> IngestSummary:
     if ingest_type != IngestType.KNOWLEDGE.value:
         raise HTTPException(
@@ -138,7 +134,6 @@ async def _ingest_knowledge_branch(
         chunks_added=result["chunks_added"],
         chunks_updated=result["chunks_updated"],
         chunks_skipped=result["chunks_skipped"],
-        mode=settings.COMORI_API_MODE,
         dispatched=result["dispatched"],
     )
 
@@ -160,13 +155,8 @@ def decode_endpoint(payload: DecodeRequest) -> DecodeResponse:
     return DecodeResponse(results=decode_hits(payload.hits))
 
 
-from app.models.request import RetrieveRequest
-from app.models.response import RetrieveResponse
-from app.clients.nest_client import NestClient, NestClientError
-
-
-def get_nest_client(settings: Settings = Depends(get_settings)) -> NestClient:
-    return NestClient(settings=settings)
+def get_nest_client() -> NestClient:
+    return NestClient()
 
 
 @router.post("/retrieve", response_model=RetrieveResponse)

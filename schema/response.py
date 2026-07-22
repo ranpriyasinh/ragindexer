@@ -11,20 +11,19 @@ class HealthResponse(BaseModel):
     app: str
     embedding_provider: str
     embedding_dim: int
-    comori_api_mode: str
 
 
 class KnowledgeChunkPayload(BaseModel):
-    """Mirrors the knowledge_chunks table (spec section 3)."""
+    """Mirrors the `chunks[]` entries POSTed to comori-api's /api/knowledge/chunks."""
 
-    chunk_id: str
+    chunkId: str
     source: str
     domain: str
-    evidence_tier: str
-    topic_tags: List[str]
+    evidenceTier: str
+    topicTags: List[str]
     content: str
     embedding: List[float]
-    corpus_version: str
+    corpusVersion: str
 
 
 class MemoryVectorPayload(BaseModel):
@@ -48,7 +47,6 @@ class IngestSummary(BaseModel):
     chunks_updated: int = 0
     chunks_skipped: int = 0
     memories_added: int = 0
-    mode: str
     dispatched: bool
 
 

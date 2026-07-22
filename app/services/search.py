@@ -11,9 +11,9 @@ from __future__ import annotations
 import re
 from typing import List
 
-from app.models.request import DecodeHit
-from app.models.response import DecodedResult
 from app.services.embeddings import EmbeddingProvider
+from schema.request import DecodeHit
+from schema.response import DecodedResult
 
 
 def embed_query(provider: EmbeddingProvider, query: str) -> List[float]:

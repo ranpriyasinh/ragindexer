@@ -44,15 +44,24 @@ class KnowledgeIngestMetadata(BaseModel):
     evidence_tier: EvidenceTier
     topic_tags: List[str] = Field(default_factory=list)
     corpus_version: Optional[str] = None
+    # Original casing as received from comori-api (e.g. "NUTRITION", "TIER1"),
+    # so the chunks payload sent back can echo it verbatim instead of the
+    # lowercased enum value used for internal validation.
+    domain_display: str = ""
+    evidence_tier_display: str = ""
 
     @model_validator(mode="before")
     @classmethod
     def normalize_metadata_case(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            if isinstance(data.get("domain"), str):
-                data["domain"] = data["domain"].lower()
-            if isinstance(data.get("evidence_tier"), str):
-                data["evidence_tier"] = data["evidence_tier"].lower()
+            raw_domain = data.get("domain")
+            if isinstance(raw_domain, str):
+                data.setdefault("domain_display", raw_domain)
+                data["domain"] = raw_domain.lower()
+            raw_tier = data.get("evidence_tier")
+            if isinstance(raw_tier, str):
+                data.setdefault("evidence_tier_display", raw_tier)
+                data["evidence_tier"] = raw_tier.lower()
         return data
 
 
@@ -79,11 +88,9 @@ class KnowledgeIngestRequest(BaseModel):
                 raw_tags = data.get("topicTags") or data.get("topic_tags") or []
                 raw_version = data.get("corpusVersion") or data.get("corpus_version")
 
-                if isinstance(raw_domain, str):
-                    raw_domain = raw_domain.lower()
-                if isinstance(raw_tier, str):
-                    raw_tier = raw_tier.lower()
-
+                # Casing is preserved here; KnowledgeIngestMetadata's own
+                # validator lowercases for enum validation while stashing the
+                # original casing in domain_display / evidence_tier_display.
                 data["metadata"] = {
                     "source": source,
                     "domain": raw_domain or "general",

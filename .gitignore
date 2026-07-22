@@ -29,7 +29,8 @@ postman/
 
 # macOS
 .DS_Store
-
+wmd/
+whtmldoc/
 # Test artifacts
 .pytest_cache/
 coverage.xml

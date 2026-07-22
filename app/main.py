@@ -10,9 +10,6 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app.api import health, knowledge, memory
-from app.config import get_settings
-
-settings = get_settings()
 
 app = FastAPI(
     title="comori-rag-indexer",

@@ -9,10 +9,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models.request import MemoryKind, MemoryTurn
 from app.services.embeddings import EmbeddingProvider
 from app.services.memory_ingestion import MemoryIngestionError, MemoryIngestionService
 from app.services.phi import PHISanitizer, PHISafetyViolationError
+from schema.request import MemoryKind, MemoryTurn
 
 
 class DummyEmbeddingProvider(EmbeddingProvider):

@@ -12,9 +12,9 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from app.models.request import MemoryIngestRequest
-from app.models.response import IngestSummary
 from app.services.memory_ingestion import MemoryIngestionError, MemoryIngestionService
+from schema.request import MemoryIngestRequest
+from schema.response import IngestSummary
 
 # No routes are registered directly on this router today — it exists to keep
 # memory-branch logic isolated per the fixed directory structure, and is
@@ -47,6 +47,5 @@ def handle_memory_ingest(
     return IngestSummary(
         type="memory",
         memories_added=result["memories_added"],
-        mode=result["mode"],
         dispatched=result["dispatched"],
     )

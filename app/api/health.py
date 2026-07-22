@@ -1,18 +1,18 @@
-from fastapi import APIRouter, Depends
+import os
 
-from app.config import Settings, get_settings
-from app.models.response import HealthResponse
+from fastapi import APIRouter
+
 from app.services.embeddings import get_embedding_provider
+from schema.response import HealthResponse
 
 router = APIRouter(tags=["health"])
 
 
 @router.get("/health", response_model=HealthResponse)
-def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
+def health() -> HealthResponse:
     provider = get_embedding_provider()
     return HealthResponse(
-        app=settings.APP_NAME,
+        app=os.getenv("APP_NAME", "comori-rag-indexer"),
         embedding_provider=provider.name,
         embedding_dim=provider.dimension,
-        comori_api_mode=settings.COMORI_API_MODE,
     )

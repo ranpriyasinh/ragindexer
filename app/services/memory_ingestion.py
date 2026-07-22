@@ -10,11 +10,10 @@ import logging
 from typing import Any, Dict, List
 
 from app.clients.nest_client import NestClient
-from app.config import Settings, get_settings
-from app.models.request import MemoryTurn
 from app.services.embeddings import EmbeddingProvider, get_embedding_provider
 from app.services.phi import PHISanitizer, PHISafetyViolationError
-from app.utils import new_memory_id
+from schema.request import MemoryTurn
+from utils import new_memory_id
 
 logger = logging.getLogger("comori-rag-indexer.memory_ingestion")
 
@@ -29,13 +28,11 @@ class MemoryIngestionService:
 
     def __init__(
         self,
-        settings: Settings | None = None,
         embedding_provider: EmbeddingProvider | None = None,
         nest_client: NestClient | None = None,
     ) -> None:
-        self._settings = settings or get_settings()
         self._embeddings = embedding_provider or get_embedding_provider()
-        self._nest_client = nest_client or NestClient(self._settings)
+        self._nest_client = nest_client or NestClient()
 
     def ingest_memory_turns(
         self, turns: List[MemoryTurn], auto_sanitize_phi: bool = False
@@ -56,7 +53,6 @@ class MemoryIngestionService:
                 "memories_added": 0,
                 "memories_skipped": 0,
                 "dispatched": False,
-                "mode": self._settings.COMORI_API_MODE,
             }
 
         valid_turns: List[MemoryTurn] = []
@@ -90,7 +86,6 @@ class MemoryIngestionService:
                 "memories_added": 0,
                 "memories_skipped": memories_skipped,
                 "dispatched": False,
-                "mode": self._settings.COMORI_API_MODE,
             }
 
         # Batch vector generation
@@ -111,7 +106,6 @@ class MemoryIngestionService:
                 }
             )
 
-        # Dispatch rows to comori-api (print mode or http mode)
         dispatched = self._nest_client.push_memory_vectors(rows)
         logger.info(
             "Ingested %d memory vectors successfully (skipped %d).",
@@ -123,5 +117,4 @@ class MemoryIngestionService:
             "memories_added": len(rows),
             "memories_skipped": memories_skipped,
             "dispatched": dispatched,
-            "mode": self._settings.COMORI_API_MODE,
         }

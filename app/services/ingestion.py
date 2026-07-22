@@ -6,27 +6,28 @@ Branch B ("memory"):    JSON turns  -> embed -> memory_id (uuid)        -> push
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List
 
 from app.clients.nest_client import NestClient
-from app.config import Settings, get_settings
-from app.models.request import KnowledgeIngestMetadata, MemoryTurn
 from app.services import parser
 from app.services.chunker import chunk_text
 from app.services.embeddings import EmbeddingProvider, get_embedding_provider
-from app.utils import content_hash_chunk_id, new_memory_id
+from schema.request import KnowledgeIngestMetadata, MemoryTurn
+from utils import content_hash_chunk_id, new_memory_id
 
 
 class IngestionService:
     def __init__(
         self,
-        settings: Settings | None = None,
         embedding_provider: EmbeddingProvider | None = None,
         nest_client: NestClient | None = None,
     ) -> None:
-        self._settings = settings or get_settings()
+        self._chunk_size = int(os.getenv("CHUNK_TOKEN_SIZE", "400"))
+        self._chunk_overlap = int(os.getenv("CHUNK_TOKEN_OVERLAP", "50"))
+        self._corpus_version_default = os.getenv("CORPUS_VERSION", "v0.1.0")
         self._embeddings = embedding_provider or get_embedding_provider()
-        self._nest_client = nest_client or NestClient(self._settings)
+        self._nest_client = nest_client or NestClient()
 
     # ------------------------------------------------------------------
     # Branch A — knowledge documents
@@ -39,8 +40,8 @@ class IngestionService:
 
         chunks = chunk_text(
             cleaned,
-            chunk_size=self._settings.CHUNK_TOKEN_SIZE,
-            overlap=self._settings.CHUNK_TOKEN_OVERLAP,
+            chunk_size=self._chunk_size,
+            overlap=self._chunk_overlap,
         )
         if not chunks:
             return {
@@ -51,7 +52,7 @@ class IngestionService:
                 "dispatched": False,
             }
 
-        corpus_version = metadata.corpus_version or self._settings.CORPUS_VERSION
+        corpus_version = metadata.corpus_version or self._corpus_version_default
         contents = [c.content for c in chunks]
         vectors = self._embeddings.embed(contents)
 
@@ -68,14 +69,14 @@ class IngestionService:
             seen_ids.add(chunk_id)
             rows.append(
                 {
-                    "chunk_id": chunk_id,
+                    "chunkId": chunk_id,
                     "source": metadata.source,
-                    "domain": metadata.domain.value,
-                    "evidence_tier": metadata.evidence_tier.value,
-                    "topic_tags": metadata.topic_tags,
+                    "domain": metadata.domain_display or metadata.domain.value,
+                    "evidenceTier": metadata.evidence_tier_display or metadata.evidence_tier.value,
+                    "topicTags": metadata.topic_tags,
                     "content": chunk.content,
                     "embedding": vector,
-                    "corpus_version": corpus_version,
+                    "corpusVersion": corpus_version,
                 }
             )
 
@@ -96,8 +97,8 @@ class IngestionService:
 
         chunks = chunk_text(
             cleaned,
-            chunk_size=self._settings.CHUNK_TOKEN_SIZE,
-            overlap=self._settings.CHUNK_TOKEN_OVERLAP,
+            chunk_size=self._chunk_size,
+            overlap=self._chunk_overlap,
         )
         if not chunks:
             return {
@@ -108,7 +109,7 @@ class IngestionService:
                 "dispatched": False,
             }
 
-        corpus_version = metadata.corpus_version or self._settings.CORPUS_VERSION
+        corpus_version = metadata.corpus_version or self._corpus_version_default
         contents = [c.content for c in chunks]
         vectors = self._embeddings.embed(contents)
 
@@ -123,14 +124,14 @@ class IngestionService:
             seen_ids.add(chunk_id)
             rows.append(
                 {
-                    "chunk_id": chunk_id,
+                    "chunkId": chunk_id,
                     "source": metadata.source,
-                    "domain": metadata.domain.value,
-                    "evidence_tier": metadata.evidence_tier.value,
-                    "topic_tags": metadata.topic_tags,
+                    "domain": metadata.domain_display or metadata.domain.value,
+                    "evidenceTier": metadata.evidence_tier_display or metadata.evidence_tier.value,
+                    "topicTags": metadata.topic_tags,
                     "content": chunk.content,
                     "embedding": vector,
-                    "corpus_version": corpus_version,
+                    "corpusVersion": corpus_version,
                 }
             )
 

@@ -1,20 +1,13 @@
-"""
-Client for `comori-api` (NestJS).
-
-Per spec section 5.3 ("No Direct Database Connections"): this module is the
-ONLY place that knows about comori-api. Every other module sends payloads
-here and does not care whether they end up printed to the console or POSTed
-over HTTP.
-"""
 from __future__ import annotations
 
-import json
 import logging
+import os
 from typing import Any, Dict, List
 
 import httpx
 
-from app.config import Settings, get_settings
+from app.constants import KNOWLEDGE_CHUNKS_ENDPOINT,MEMORY_VECTORS_ENDPOINT,KNOWLEDGE_SEARCH_ENDPOINT,MEMORY_SEARCH_ENDPOINT
+
 
 logger = logging.getLogger("comori-rag-indexer.nest_client")
 
@@ -24,289 +17,57 @@ class NestClientError(RuntimeError):
 
 
 class NestClient:
-    def __init__(self, settings: Settings | None = None) -> None:
-        self._settings = settings or get_settings()
-
-    @property
-    def mode(self) -> str:
-        return self._settings.COMORI_API_MODE
+    def __init__(self) -> None:
+        self._base_url = os.getenv("COMORI_API_BASE_URL", "https://api-dev.comori.io/")
+        self._api_key = os.getenv("COMORI_API_KEY")
+        self._timeout = float(os.getenv("HTTP_TIMEOUT_SECONDS", "15.0"))
 
     def push_knowledge_chunks(self, chunks: List[Dict[str, Any]]) -> bool:
         """Send knowledge_chunks rows (Branch A) to comori-api."""
-        return self._dispatch(endpoint="/v1/knowledge/chunks", payload={"chunks": chunks})
+        return self._post(endpoint=KNOWLEDGE_CHUNKS_ENDPOINT, payload={"chunks": chunks})
 
     def push_memory_vectors(self, memories: List[Dict[str, Any]]) -> bool:
         """Send memory_vectors rows (Branch B) to comori-api."""
-        return self._dispatch(endpoint="/v1/memory/vectors", payload={"memories": memories})
-
-    # -- internal --------------------------------------------------------
-
-    def _dispatch(self, endpoint: str, payload: Dict[str, Any]) -> bool:
-        if self._settings.COMORI_API_MODE == "print":
-            self._print_payload(endpoint, payload)
-            if endpoint == "/v1/memory/vectors":
-                self._save_memories_to_db(payload.get("memories", []))
-            elif endpoint == "/v1/knowledge/chunks":
-                self._save_knowledge_chunks_to_db(payload.get("chunks", []))
-            return True
-        if self._settings.COMORI_API_MODE == "http":
-            return self._send_http(endpoint, payload)
-        raise NestClientError(f"Unknown COMORI_API_MODE: {self._settings.COMORI_API_MODE}")
-
-    def _save_knowledge_chunks_to_db(self, chunks: List[Dict[str, Any]]) -> None:
-        if not chunks:
-            return
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=self._settings.DB_HOST,
-                port=self._settings.DB_PORT,
-                database=self._settings.DB_NAME,
-                user=self._settings.DB_USER,
-                password=self._settings.DB_PASSWORD,
-            )
-            try:
-                with conn.cursor() as cursor:
-                    for c in chunks:
-                        emb = c.get("embedding")
-                        emb_str = f"[{','.join(map(str, emb))}]" if emb else None
-                        cursor.execute(
-                            """
-                            INSERT INTO knowledge_chunks (chunk_id, source, domain, evidence_tier, topic_tags, content, embedding, corpus_version)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (chunk_id) DO UPDATE SET
-                                source = EXCLUDED.source,
-                                domain = EXCLUDED.domain,
-                                evidence_tier = EXCLUDED.evidence_tier,
-                                topic_tags = EXCLUDED.topic_tags,
-                                content = EXCLUDED.content,
-                                embedding = EXCLUDED.embedding,
-                                corpus_version = EXCLUDED.corpus_version
-                            """,
-                            (
-                                c.get("chunk_id"),
-                                c.get("source"),
-                                c.get("domain"),
-                                c.get("evidence_tier"),
-                                c.get("topic_tags"),
-                                c.get("content"),
-                                emb_str,
-                                c.get("corpus_version"),
-                            ),
-                        )
-                conn.commit()
-                logger.info("Successfully stored %d knowledge chunks in pgvector database.", len(chunks))
-            except Exception as e:
-                conn.rollback()
-                logger.error("Failed to write knowledge chunks to DB: %s", e)
-            finally:
-                conn.close()
-        except Exception as e:
-            logger.error("Failed to connect to local PG database for knowledge chunks: %s", e)
-
-    def _save_memories_to_db(self, memories: List[Dict[str, Any]]) -> None:
-        if not memories:
-            return
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=self._settings.DB_HOST,
-                port=self._settings.DB_PORT,
-                database=self._settings.DB_NAME,
-                user=self._settings.DB_USER,
-                password=self._settings.DB_PASSWORD,
-            )
-            try:
-                with conn.cursor() as cursor:
-                    # Automatically ensure users exist in the local users table to prevent FK failure
-                    user_ids = list({m["user_id"] for m in memories if m.get("user_id")})
-                    for uid in user_ids:
-                        cursor.execute(
-                            "INSERT INTO users (id) VALUES (%s) ON CONFLICT (id) DO NOTHING",
-                            (uid,),
-                        )
-
-                    for m in memories:
-                        emb = m.get("embedding")
-                        emb_str = f"[{','.join(map(str, emb))}]" if emb else None
-                        cursor.execute(
-                            """
-                            INSERT INTO memory_vectors (memory_id, user_id, kind, snippet, ref, embedding, occurred_at)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (memory_id) DO UPDATE SET
-                                user_id = EXCLUDED.user_id,
-                                kind = EXCLUDED.kind,
-                                snippet = EXCLUDED.snippet,
-                                ref = EXCLUDED.ref,
-                                embedding = EXCLUDED.embedding,
-                                occurred_at = EXCLUDED.occurred_at
-                            """,
-                            (
-                                m.get("memory_id"),
-                                m.get("user_id"),
-                                m.get("kind"),
-                                m.get("snippet"),
-                                m.get("ref"),
-                                emb_str,
-                                m.get("occurred_at"),
-                            ),
-                        )
-                conn.commit()
-                logger.info("Successfully stored %d memories in pgvector database.", len(memories))
-            except Exception as e:
-                conn.rollback()
-                logger.error("Failed to write memory vectors to DB: %s", e)
-            finally:
-                conn.close()
-        except Exception as e:
-            logger.error("Failed to connect to local PG database: %s", e)
-
-    def _print_payload(self, endpoint: str, payload: Dict[str, Any]) -> None:
-        logger.info(
-            "[PRINT MODE] Would POST to comori-api%s\n%s",
-            endpoint,
-            json.dumps(payload, indent=2, default=str),
-        )
-        print(f"\n=== comori-api PRINT MODE: POST {endpoint} ===")
-        print(json.dumps(payload, indent=2, default=str))
-        print("=== end payload ===\n")
-
-    def _send_http(self, endpoint: str, payload: Dict[str, Any]) -> bool:
-        if not self._settings.COMORI_API_URL:
-            raise NestClientError("COMORI_API_MODE=http requires COMORI_API_URL to be set.")
-
-        url = self._settings.COMORI_API_URL.rstrip("/") + endpoint
-        headers = {"Content-Type": "application/json"}
-        if self._settings.COMORI_API_KEY:
-            headers["Authorization"] = f"Bearer {self._settings.COMORI_API_KEY}"
-
-        try:
-            with httpx.Client(timeout=self._settings.HTTP_TIMEOUT_SECONDS) as client:
-                response = client.post(url, headers=headers, json=payload)
-                response.raise_for_status()
-            return True
-        except httpx.HTTPError as exc:
-            logger.error("comori-api dispatch failed: %s", exc)
-            raise NestClientError(f"Failed to reach comori-api at {url}: {exc}") from exc
+        return self._post(endpoint=MEMORY_VECTORS_ENDPOINT, payload={"memories": memories})
 
     def search_knowledge_chunks(self, embedding: List[float], k: int) -> List[Dict[str, Any]]:
         """Ask comori-api to run a pgvector similarity search against knowledge_chunks."""
         return self._fetch(
-            endpoint="/v1/knowledge/search",
+            endpoint=KNOWLEDGE_SEARCH_ENDPOINT,
             payload={"embedding": embedding, "k": k},
         )
 
     def search_memory_vectors(self, user_id: str, embedding: List[float], k: int) -> List[Dict[str, Any]]:
         """Ask comori-api to run a pgvector similarity search against memory_vectors."""
         return self._fetch(
-            endpoint="/v1/memory/search",
+            endpoint=MEMORY_SEARCH_ENDPOINT,
             payload={"user_id": user_id, "embedding": embedding, "k": k},
         )
 
     # -- internal --------------------------------------------------------
 
-    def _fetch(self, endpoint: str, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Like _dispatch, but for calls that return data instead of a bool."""
-        if self._settings.COMORI_API_MODE == "print":
-            self._print_payload(endpoint, payload)
-            if endpoint == "/v1/knowledge/search":
-                return self._search_knowledge_in_db(payload.get("embedding", []), payload.get("k", 5))
-            elif endpoint == "/v1/memory/search":
-                return self._search_memory_in_db(payload.get("user_id"), payload.get("embedding", []), payload.get("k", 5))
-            logger.info("[PRINT MODE] Unknown search endpoint — returning empty list.")
-            return []
-        if self._settings.COMORI_API_MODE == "http":
-            return self._send_http_fetch(endpoint, payload)
-        raise NestClientError(f"Unknown COMORI_API_MODE: {self._settings.COMORI_API_MODE}")
-
-    def _search_knowledge_in_db(self, embedding: List[float], k: int) -> List[Dict[str, Any]]:
-        if not embedding:
-            return []
-        try:
-            import psycopg2
-            from psycopg2.extras import RealDictCursor
-            conn = psycopg2.connect(
-                host=self._settings.DB_HOST,
-                port=self._settings.DB_PORT,
-                database=self._settings.DB_NAME,
-                user=self._settings.DB_USER,
-                password=self._settings.DB_PASSWORD,
-            )
-            try:
-                with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                    emb_str = f"[{','.join(map(str, embedding))}]"
-                    cursor.execute(
-                        """
-                        SELECT chunk_id AS id, source, domain, evidence_tier, topic_tags, content,
-                               (1 - (embedding <=> %s::vector)) AS score
-                       FROM knowledge_chunks
-                       ORDER BY embedding <=> %s::vector ASC
-                       LIMIT %s;
-                       """,
-                        (emb_str, emb_str, k),
-                    )
-                    rows = cursor.fetchall()
-                    return [dict(r) for r in rows]
-            except Exception as e:
-                logger.error("Local PG search_knowledge failed: %s", e)
-                return []
-            finally:
-                conn.close()
-        except Exception as e:
-            logger.error("Failed to connect to local PG for search: %s", e)
-            return []
-
-    def _search_memory_in_db(self, user_id: str, embedding: List[float], k: int) -> List[Dict[str, Any]]:
-        if not embedding or not user_id:
-            return []
-        try:
-            import psycopg2
-            from psycopg2.extras import RealDictCursor
-            conn = psycopg2.connect(
-                host=self._settings.DB_HOST,
-                port=self._settings.DB_PORT,
-                database=self._settings.DB_NAME,
-                user=self._settings.DB_USER,
-                password=self._settings.DB_PASSWORD,
-            )
-            try:
-                with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                    emb_str = f"[{','.join(map(str, embedding))}]"
-                    cursor.execute(
-                        """
-                        SELECT memory_id AS id, user_id, kind, snippet AS content, ref, occurred_at,
-                               (kind || ' / ' || ref) AS source,
-                               (1 - (embedding <=> %s::vector)) AS score
-                       FROM memory_vectors
-                       WHERE user_id = %s
-                       ORDER BY embedding <=> %s::vector ASC
-                       LIMIT %s;
-                       """,
-                        (emb_str, user_id, emb_str, k),
-                    )
-                    rows = cursor.fetchall()
-                    return [dict(r) for r in rows]
-            except Exception as e:
-                logger.error("Local PG search_memory failed: %s", e)
-                return []
-            finally:
-                conn.close()
-        except Exception as e:
-            logger.error("Failed to connect to local PG for search: %s", e)
-            return []
-
-    def _send_http_fetch(self, endpoint: str, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-        if not self._settings.COMORI_API_URL:
-            raise NestClientError("COMORI_API_MODE=http requires COMORI_API_URL to be set.")
-
-        url = self._settings.COMORI_API_URL.rstrip("/") + endpoint
+    def _headers(self) -> Dict[str, str]:
         headers = {"Content-Type": "application/json"}
-        if self._settings.COMORI_API_KEY:
-            headers["Authorization"] = f"Bearer {self._settings.COMORI_API_KEY}"
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        return headers
 
+    def _post(self, endpoint: str, payload: Dict[str, Any]) -> bool:
+        url = self._base_url.rstrip("/") + endpoint
         try:
-            with httpx.Client(timeout=self._settings.HTTP_TIMEOUT_SECONDS) as client:
-                response = client.post(url, headers=headers, json=payload)
+            with httpx.Client(timeout=self._timeout) as client:
+                response = client.post(url, headers=self._headers(), json=payload)
+                response.raise_for_status()
+            return True
+        except httpx.HTTPError as exc:
+            logger.error("comori-api dispatch failed: %s", exc)
+            raise NestClientError(f"Failed to reach comori-api at {url}: {exc}") from exc
+
+    def _fetch(self, endpoint: str, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        url = self._base_url.rstrip("/") + endpoint
+        try:
+            with httpx.Client(timeout=self._timeout) as client:
+                response = client.post(url, headers=self._headers(), json=payload)
                 response.raise_for_status()
                 return response.json().get("hits", [])
         except httpx.HTTPError as exc:
